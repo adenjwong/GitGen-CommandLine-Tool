@@ -3,20 +3,21 @@ import os
 import json
 import subprocess
 import click
-import openai
+from openai import OpenAI
 
-# Ensure your API key is set in the environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Instantiate the OpenAI client using the OPENAI_API_KEY environment variable
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def ask_llm(prompt: str) -> str:
     """
     Send a prompt to the LLM and return its response.
     """
-    resp = openai.ChatCompletion.create(
+    resp = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
+    # Extract and return the assistant's content
     return resp.choices[0].message.content
 
 
@@ -38,7 +39,7 @@ def main(intent: tuple[str, ...], dry_run: bool) -> None:
     """
     Translate natural-language INTENT into git commands and execute them.
     """
-    # Combine intent words into a sentence
+    # Combine intent words into a single string
     intent_text = " ".join(intent)
 
     # Build the LLM prompt
@@ -50,18 +51,23 @@ def main(intent: tuple[str, ...], dry_run: bool) -> None:
 
     # Get JSON steps from the LLM
     raw_response = ask_llm(prompt)
-    steps = json.loads(raw_response)
+    try:
+        steps = json.loads(raw_response)
+    except json.JSONDecodeError:
+        click.echo("Failed to parse JSON from LLM. Response was:")
+        click.echo(raw_response)
+        return
 
     # Process each step
     for step in steps.get("steps", []):
         action = step.get("action")
         if action == "ask":
-            # Ask user for additional input
+            # Prompt the user for input
             answer = click.prompt(step.get("prompt", ""))
             step["answer"] = answer
         elif action == "run":
-            # Replace placeholder with user answer if present
-            cmd = step.get("cmd", "").replace('<user_input>', step.get("answer", ""))
+            # Replace placeholder with user input if present
+            cmd = step.get("cmd", "").replace("<user_input>", step.get("answer", ""))
             success, output = execute(cmd, dry_run)
             if not success:
                 # On error, ask the LLM for a fix
