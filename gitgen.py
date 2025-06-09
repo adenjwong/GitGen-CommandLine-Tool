@@ -5,8 +5,15 @@ import subprocess
 import click
 from openai import OpenAI
 
-# Instantiate the OpenAI client using the OPENAI_API_KEY environment variable
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Load and sanitize the API key (remove any non-ASCII characters)
+raw_key = os.getenv("OPENAI_API_KEY", "") or ""
+sanitized_key = ''.join(ch for ch in raw_key if ord(ch) < 128)
+if not sanitized_key:
+    click.echo("❌ No valid OPENAI_API_KEY found. Please set it in your environment.")
+    exit(1)
+
+# Instantiate the OpenAI client
+client = OpenAI(api_key=sanitized_key)
 
 
 def ask_llm(prompt: str) -> str:
@@ -17,7 +24,6 @@ def ask_llm(prompt: str) -> str:
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    # Extract and return the assistant's content
     return resp.choices[0].message.content
 
 
@@ -39,38 +45,31 @@ def main(intent: tuple[str, ...], dry_run: bool) -> None:
     """
     Translate natural-language INTENT into git commands and execute them.
     """
-    # Combine intent words into a single string
     intent_text = " ".join(intent)
 
-    # Build the LLM prompt
     prompt = (
         f"Translate this intent into sequential git steps as JSON schema:\n"
         f"`{{steps: [{{action: 'ask'|'run', cmd?: str, prompt?: str}}]}}`\n"
         f"Intent: \"{intent_text}\""
     )
 
-    # Get JSON steps from the LLM
     raw_response = ask_llm(prompt)
     try:
         steps = json.loads(raw_response)
     except json.JSONDecodeError:
-        click.echo("Failed to parse JSON from LLM. Response was:")
+        click.echo("❌ Failed to parse JSON from LLM. Response was:")
         click.echo(raw_response)
         return
 
-    # Process each step
     for step in steps.get("steps", []):
         action = step.get("action")
         if action == "ask":
-            # Prompt the user for input
             answer = click.prompt(step.get("prompt", ""))
             step["answer"] = answer
         elif action == "run":
-            # Replace placeholder with user input if present
             cmd = step.get("cmd", "").replace("<user_input>", step.get("answer", ""))
             success, output = execute(cmd, dry_run)
             if not success:
-                # On error, ask the LLM for a fix
                 fix_prompt = (
                     f"I ran `{cmd}` and got an error:\n{output}\n"
                     "How can I fix this? Reply with a single git command."
